@@ -1,0 +1,143 @@
+#include "main.h"
+
+int PutBulletMotorPos;
+uint8 FLAG_1MS=0;
+uint8 FLAG_5MS=0;
+
+//观察暂时用
+extern float text_temp;
+extern int32_t CurrInt_201;
+
+int result=1;    
+short gyro[3], accel[3], sensors;
+#define q30  1073741824.0f
+float q0=1.0f,q1=0.0f,q2=0.0f,q3=0.0f;
+float Pitch,Roll,Yaw;
+long quat[4];			//dmp读取时存放的数据
+unsigned long sensor_timestamp;
+unsigned char more;
+
+uint16 encoder_cnt=0;
+float  sum_201 = 0; 
+static uint8 buf_cnt = 0;
+static uint8 pulse_cnt=0;
+uint8 num = 0;
+
+
+int main(void)
+{
+  unsigned char temp_data = 0x00;
+	  //初始化电调
+	  delay_ms(1500);
+    BSP_Init();   
+    PWM1 = 1000;
+    PWM2 = 1000;
+    //delay_ms(1000);
+    //delay_ms(2500);
+	
+		Enable_PutBulletMotor();
+		delay_ms(30);//延时
+		Zero_PutBulletMotor();
+		Send_PullBulletMotor_Pos(0);
+	
+	  IIC_GPIO_Init();  
+    HEAT_Configuration();
+	
+	 if(IIC_ReadData(0xD0,0x75 ,1 ,&temp_data)==0) //??IIC?????????MPU6050
+    {
+        if(temp_data != 0x68)
+        {
+            printf("error 1A\r\n");
+            return 0xff; //????,??0xff
+        }
+    }
+    else
+    {
+        printf("error 1B\r\n");
+        return 0xff; //???? ??0xff
+    }
+	
+
+   dmp_set_init();
+		//MPU6050_Interrupt_Configuration(); 
+    while(1)
+    {
+     CurrentProtect();//电调电流保护
+			
+		 dmp_read_fifo(gyro, accel, quat, &sensor_timestamp, &sensors,&more);	//读取四元数数据，并存放到quat数组 
+     if (sensors & INV_WXYZ_QUAT )
+	 {
+		 //四元数转成欧拉角
+	 	 q0=quat[0] / q30;	
+		 q1=quat[1] / q30;
+		 q2=quat[2] / q30;
+		 q3=quat[3] / q30;
+		 Pitch  = asin(2 * q1 * q3 - 2 * q0* q2)* 57.3;
+		 Roll = atan2(2 * q2 * q3 + 2 * q0 * q1, -2 * q1 * q1 - 2 * q2* q2 + 1)* 57.3;
+		 Yaw = 	atan2(2*(q1*q2 + q0*q3),q0*q0+q1*q1-q2*q2-q3*q3) * 57.3;
+	 }
+			 
+			if(FLAG_5MS)
+			{
+		  int CRC2[4];
+//			CRC2[0]=(int)Yuntai_Control.YunTai_Pitch_Motor.target_angle*100;
+//      CRC2[1]=(int)Yuntai_Control.YunTai_Pitch_Motor.this_num_angle*100;
+      //CRC2[2]=(int)Yuntai_Control.YunTai_Pitch_Motor.position_num_output;
+			//	CRC2[2]=(int)text_temp;
+//			CRC2[2]=(int)CurrInt_201;
+//      CRC2[3]=(int)(Yuntai_Control.YunTai_Pitch_Motor.rate_num_avg*600);
+//				CRC2[0]=(int)MPU6050_Angle.Pitch*10;
+//				CRC2[1]=(int)Accel_Raw_Average_Data.Y;
+//				CRC2[2]=(int)Gyro_Radian_Data.X*100;
+//				CRC2[3]=0;
+//        CRC_send(CRC2);
+				//Accel_Raw_Average_Data Gyro_Radian_Data
+				
+//				CRC2[0]=(int)Pitch*10;
+//				CRC2[1]=(int)Roll*10;
+//				CRC2[2]=(int)Yaw*10;
+//				CRC2[3]=0;
+				
+				CRC2[0]=(int)gyro[0];
+				CRC2[1]=(int)gyro[1];
+				CRC2[2]=(int)gyro[2];
+				CRC2[3]=0;
+        CRC_send(CRC2);
+				
+	    FLAG_5MS=0;
+      }
+     if(FLAG_1MS)
+		 {
+			 
+			 if(encoder_cnt < 1500)//初始化阶段
+			 {
+				 encoder_cnt++;
+       }
+				else
+				{
+					
+			Yuntai_Control.YunTai_Pitch_Motor.rate_num_one = Yuntai_Control.YunTai_Pitch_Motor.encoder_num*0.044 - Yuntai_Control.YunTai_Pitch_Motor.last_num_angle;
+			Yuntai_Control.YunTai_Pitch_Motor.last_num_angle = Yuntai_Control.YunTai_Pitch_Motor.encoder_num*0.044;
+			//进行平均值滤波
+	    Yuntai_Control.YunTai_Pitch_Motor.rate_num_temp[buf_cnt] = Yuntai_Control.YunTai_Pitch_Motor.rate_num_one;
+	    buf_cnt++;
+      if(buf_cnt == BUF_NUM)
+      buf_cnt = 0;						
+      for(num = 0;num < BUF_NUM;num++)
+      {
+       sum_201 += Yuntai_Control.YunTai_Pitch_Motor.rate_num_temp[num];
+      }
+      Yuntai_Control.YunTai_Pitch_Motor.rate_num_avg = sum_201/BUF_NUM; 
+		
+      Yuntai_Control.YunTai_Pitch_Motor.this_num_angle=Roll;		
+			Yuntai_Control.YunTai_Pitch_Motor.position_num_output = Position_Control_201(Yuntai_Control.YunTai_Pitch_Motor.this_num_angle,Yuntai_Control.YunTai_Pitch_Motor.target_angle);
+			Cmd_ESC((int16_t)Yuntai_Control.YunTai_Pitch_Motor.position_num_output,0,0);
+        }
+			 FLAG_1MS=0;
+     }
+
+
+	  }
+}
+
+
